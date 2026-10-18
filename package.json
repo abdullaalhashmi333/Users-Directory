@@ -1,0 +1,22 @@
+{
+  "name": "users-directory",
+  "version": "1.0.0",
+  "description": "Directory of entities, their departments and focal points",
+  "private": true,
+  "main": "src/server.js",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^4.22.3"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

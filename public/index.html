@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Users Directory</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232456c7'/%3E%3Cpath d='M9 10h14M9 16h10M9 22h12' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="test-banner" class="test-banner" hidden>Test mode: sample data only. Do not enter real personal data.</div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1 class="brand">Users Directory</h1>
+      <div class="search">
+        <input id="search" type="search" dir="auto" placeholder="Search names, titles, emails, departments…" aria-label="Search" autocomplete="off">
+      </div>
+      <div class="actions">
+        <button id="add-entity" class="btn primary" type="button">+ Entity</button>
+        <button id="export-all" class="btn" type="button">Export Excel</button>
+        <details class="menu">
+          <summary class="btn" aria-label="More actions">⋯</summary>
+          <div class="menu-list">
+            <button id="export-all-menu" class="export-mobile" type="button">Export Excel</button>
+            <button id="expand-all" type="button">Expand all</button>
+            <button id="collapse-all" type="button">Collapse all</button>
+            <button id="reset-sample" type="button" hidden>Reset to sample data</button>
+          </div>
+        </details>
+      </div>
+    </div>
+    <div id="summary" class="summary" aria-live="polite"></div>
+  </header>
+
+  <main id="tree" class="tree" aria-busy="true"></main>
+
+  <dialog id="form-dialog">
+    <form id="form" method="dialog" novalidate>
+      <h2 id="form-title"></h2>
+      <div id="form-fields"></div>
+      <div id="form-warning" class="warning" hidden></div>
+      <div id="form-error" class="error" role="alert" hidden></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary" id="form-submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <div class="confirm-body">
+      <h2 id="confirm-title"></h2>
+      <div id="confirm-message"></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="button" class="btn danger" id="confirm-ok">Delete</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

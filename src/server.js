@@ -2,10 +2,17 @@
 
 const { createPool } = require('./db');
 const { createApp, initDatabase } = require('./app');
+const { retry } = require('./retry');
 
 async function main() {
   const pool = createPool();
-  const result = await initDatabase(pool);
+  // A database that was just added on Railway can take a little while to accept
+  // connections, so start-up retries for up to a minute before giving up.
+  const result = await retry(() => initDatabase(pool), {
+    attempts: 20,
+    delayMs: 3000,
+    onError: (err, i, n) => console.error(`Database not ready (attempt ${i}/${n}): ${err.code || ''} ${err.message}`),
+  });
   if (result.adminCreated) console.log('Created the first admin account from ADMIN_USERNAME.');
   if (result.seeded) console.log('Loaded sample data into the empty directory (SEED_SAMPLE_DATA=true).');
 

@@ -377,3 +377,29 @@ describe('web app', () => {
     await s.close();
   });
 });
+
+describe('start-up', () => {
+  const { retry } = require('../src/retry');
+
+  test('retries until the database is ready', async () => {
+    let calls = 0;
+    const errors = [];
+    const out = await retry(async () => {
+      calls++;
+      if (calls < 3) throw Object.assign(new Error('not ready'), { code: 'ECONNREFUSED' });
+      return 'ok';
+    }, { attempts: 5, delayMs: 1, onError: (e, i) => errors.push(i) });
+    assert.equal(out, 'ok');
+    assert.equal(calls, 3);
+    assert.deepEqual(errors, [1, 2]);
+  });
+
+  test('gives up after the last attempt', async () => {
+    await assert.rejects(retry(async () => { throw new Error('down'); }, { attempts: 3, delayMs: 1 }), /down/);
+  });
+
+  test('without DATABASE_URL it stops with a clear message', () => {
+    const { createPool } = require('../src/db');
+    assert.throws(() => createPool(''), /DATABASE_URL is not set/);
+  });
+});

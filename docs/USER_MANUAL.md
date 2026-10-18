@@ -7,9 +7,28 @@ The Users Directory lists **entities**, the **departments** inside each entity, 
 Entity → Departments → Focal Points
 ```
 
-> **Test mode.** The system currently holds made-up sample data only. A yellow banner at the
-> top says so. Do not enter real personal data until the system has been switched to
-> production rules.
+> **Test mode.** While the yellow banner is shown at the top, the system is still in test
+> mode. Do not enter real personal data until the owner has switched it to production rules.
+
+## Signing in
+
+Open the link and sign in with the username and password an admin gave you. You stay signed
+in for 12 hours on that device. Use **⋯ → Sign out** on shared devices.
+
+What you can do depends on your role:
+
+| Role | Can do |
+|---|---|
+| **Viewer** | See the directory, search and export to Excel |
+| **Editor** | Everything a viewer can, plus add, edit and delete entities, departments and focal points |
+| **Admin** | Everything an editor can, plus manage users |
+
+Viewers do not see the add, edit or delete buttons.
+
+**Change your password:** **⋯ → Change password**, enter the current one and a new one
+(at least 10 characters).
+
+After 5 wrong passwords, sign-in for that username is paused for 15 minutes.
 
 ## The main screen
 
@@ -24,7 +43,7 @@ department shows its focal points. The line under the header shows totals.
 - A small yellow **"also used … elsewhere"** tag means the same email belongs to another
   focal point too.
 
-## Adding and editing
+## Adding and editing (editors and admins)
 
 | To do this | Use |
 |---|---|
@@ -49,7 +68,7 @@ follows the direction of the text you type.
 
 ## Deleting
 
-Every **Delete** asks for confirmation first.
+Every **Delete** asks for confirmation first. Only editors and admins can delete.
 
 - Deleting a **department** that still has focal points shows a warning listing every focal
   point that will be removed.
@@ -77,7 +96,23 @@ The file has one row per focal point with columns Entity, Department, Focal Poin
 Title, Email, Remarks, Created and Last Updated. Departments without focal points still
 appear as a row. The header row is frozen and has filters.
 
-## Resetting the sample data (test mode only)
+## Managing users (admins)
 
-**⋯ → Reset to sample data** deletes everything and reloads the made-up sample data. It asks
-for confirmation first. This option disappears once the system is in production mode.
+Open **⋯ → Manage users**.
+
+- **+ Add user**: choose a username, an optional display name, a role and a starting
+  password (at least 10 characters). Share the password with the person privately; they can
+  change it after signing in.
+- **Edit**: change the display name or role, or set a new password. Setting a new password
+  or changing the role signs that person out everywhere.
+- **Deactivate / Activate**: a deactivated user cannot sign in and is signed out at once.
+  Their account stays, so it can be activated again.
+- **Delete**: removes the account. Directory records are not affected.
+
+You cannot deactivate, demote or delete yourself, and there is always at least one active
+admin.
+
+## Your data is kept
+
+Everything is stored in a database and kept across updates and restarts. Updates to the
+system never reset or replace your records.

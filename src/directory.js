@@ -13,10 +13,6 @@ class AppError extends Error {
   }
 }
 
-function now() {
-  return new Date().toISOString();
-}
-
 function clean(value) {
   if (value === undefined || value === null) return '';
   return String(value).normalize('NFC').trim();
@@ -33,37 +29,46 @@ function isValidEmail(email) {
   return EMAIL_RE.test(email);
 }
 
-function createDirectory(db) {
-  const q = (sql) => db.prepare(sql);
+// Route ids arrive as strings; anything that is not a positive integer is simply "not found".
+function id(value) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
 
-  function getEntity(id) {
-    const row = q('SELECT id, name, created_at, updated_at FROM entities WHERE id = ?').get(Number(id));
+function isUniqueViolation(err) {
+  return err && err.code === '23505';
+}
+
+// `db` is a pg Pool or a client inside a transaction; both expose query().
+function createDirectory(db) {
+  const one = async (sql, params) => (await db.query(sql, params)).rows[0];
+  const all = async (sql, params) => (await db.query(sql, params)).rows;
+
+  async function getEntity(entityId) {
+    const row = await one('SELECT id, name, created_at, updated_at FROM entities WHERE id = $1', [id(entityId)]);
     if (!row) throw new AppError(404, 'Entity not found.');
     return row;
   }
 
-  function getDepartment(id) {
-    const row = q('SELECT id, entity_id, name, created_at, updated_at FROM departments WHERE id = ?').get(Number(id));
+  async function getDepartment(deptId) {
+    const row = await one('SELECT id, entity_id, name, created_at, updated_at FROM departments WHERE id = $1', [id(deptId)]);
     if (!row) throw new AppError(404, 'Department not found.');
     return row;
   }
 
-  function getFocalPoint(id) {
-    const row = q(`SELECT id, department_id, name, title, email, remarks, created_at, updated_at
-                   FROM focal_points WHERE id = ?`).get(Number(id));
+  async function getFocalPoint(fpId) {
+    const row = await one(`SELECT id, department_id, name, title, email, remarks, created_at, updated_at
+                           FROM focal_points WHERE id = $1`, [id(fpId)]);
     if (!row) throw new AppError(404, 'Focal point not found.');
     return row;
   }
 
-  function assertEntityNameFree(name, exceptId = 0) {
-    const clash = q('SELECT id FROM entities WHERE name_key = ? AND id <> ?').get(key(name), Number(exceptId));
-    if (clash) throw new AppError(409, `An entity named "${name}" already exists.`, { field: 'name' });
+  function entityNameTaken(name) {
+    return new AppError(409, `An entity named "${name}" already exists.`, { field: 'name' });
   }
 
-  function assertDepartmentNameFree(entityId, name, exceptId = 0) {
-    const clash = q('SELECT id FROM departments WHERE entity_id = ? AND name_key = ? AND id <> ?')
-      .get(Number(entityId), key(name), Number(exceptId));
-    if (clash) throw new AppError(409, `This entity already has a department named "${name}".`, { field: 'name' });
+  function departmentNameTaken(name) {
+    return new AppError(409, `This entity already has a department named "${name}".`, { field: 'name' });
   }
 
   function focalPointInput(body) {
@@ -77,100 +82,119 @@ function createDirectory(db) {
   }
 
   // Other focal points that use the same email (case-insensitive). Used to warn, never to block.
-  function emailDuplicates(email, exceptId = 0) {
+  async function emailDuplicates(email, exceptId = 0) {
     const k = key(email || '');
     if (!k) return [];
-    return q(`SELECT f.id, f.name, f.email, d.id AS department_id, d.name AS department, e.id AS entity_id, e.name AS entity
-              FROM focal_points f
-              JOIN departments d ON d.id = f.department_id
-              JOIN entities e ON e.id = d.entity_id
-              WHERE f.email_key = ? AND f.id <> ?
-              ORDER BY e.name_key, d.name_key, f.name`).all(k, Number(exceptId));
+    return all(`SELECT f.id, f.name, f.email, d.id AS department_id, d.name AS department, e.id AS entity_id, e.name AS entity
+                FROM focal_points f
+                JOIN departments d ON d.id = f.department_id
+                JOIN entities e ON e.id = d.entity_id
+                WHERE f.email_key = $1 AND f.id <> $2
+                ORDER BY e.name_key, d.name_key, f.name`, [k, id(exceptId)]);
+  }
+
+  async function entityImpact(entityId) {
+    const entity = await getEntity(entityId);
+    const departments = await all(`SELECT d.id, d.name, COUNT(f.id)::int AS focal_point_count
+                                   FROM departments d LEFT JOIN focal_points f ON f.department_id = d.id
+                                   WHERE d.entity_id = $1 GROUP BY d.id ORDER BY d.name_key`, [entity.id]);
+    const focalPoints = await all(`SELECT f.id, f.name, f.email, d.name AS department
+                                   FROM focal_points f JOIN departments d ON d.id = f.department_id
+                                   WHERE d.entity_id = $1 ORDER BY d.name_key, f.name`, [entity.id]);
+    return { entity, departments, focalPoints };
+  }
+
+  async function departmentImpact(deptId) {
+    const department = await getDepartment(deptId);
+    const focalPoints = await all('SELECT id, name, email FROM focal_points WHERE department_id = $1 ORDER BY name', [department.id]);
+    return { department, focalPoints };
   }
 
   return {
     // ---- Entities ----
-    createEntity(body) {
+    async createEntity(body) {
       const name = required(body.name, 'Name', LIMITS.name);
-      assertEntityNameFree(name);
-      const t = now();
-      const r = q('INSERT INTO entities (name, name_key, created_at, updated_at) VALUES (?, ?, ?, ?)').run(name, key(name), t, t);
-      return getEntity(r.lastInsertRowid);
+      try {
+        return await one(`INSERT INTO entities (name, name_key) VALUES ($1, $2)
+                          RETURNING id, name, created_at, updated_at`, [name, key(name)]);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw entityNameTaken(name);
+        throw err;
+      }
     },
-    updateEntity(id, body) {
-      getEntity(id);
+    async updateEntity(entityId, body) {
+      await getEntity(entityId);
       const name = required(body.name, 'Name', LIMITS.name);
-      assertEntityNameFree(name, id);
-      q('UPDATE entities SET name = ?, name_key = ?, updated_at = ? WHERE id = ?').run(name, key(name), now(), Number(id));
-      return getEntity(id);
+      try {
+        return await one(`UPDATE entities SET name = $1, name_key = $2, updated_at = now() WHERE id = $3
+                          RETURNING id, name, created_at, updated_at`, [name, key(name), id(entityId)]);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw entityNameTaken(name);
+        throw err;
+      }
     },
-    deleteEntity(id) {
-      const impact = this.entityImpact(id);
-      q('DELETE FROM entities WHERE id = ?').run(Number(id));
+    async deleteEntity(entityId) {
+      const impact = await entityImpact(entityId);
+      await db.query('DELETE FROM entities WHERE id = $1', [impact.entity.id]);
       return impact;
     },
-    entityImpact(id) {
-      const entity = getEntity(id);
-      const departments = q(`SELECT d.id, d.name, COUNT(f.id) AS focal_point_count
-                             FROM departments d LEFT JOIN focal_points f ON f.department_id = d.id
-                             WHERE d.entity_id = ? GROUP BY d.id ORDER BY d.name_key`).all(entity.id);
-      const focalPoints = q(`SELECT f.id, f.name, f.email, d.name AS department
-                             FROM focal_points f JOIN departments d ON d.id = f.department_id
-                             WHERE d.entity_id = ? ORDER BY d.name_key, f.name`).all(entity.id);
-      return { entity, departments, focalPoints };
-    },
+    entityImpact,
 
     // ---- Departments ----
-    createDepartment(entityId, body) {
-      getEntity(entityId);
+    async createDepartment(entityId, body) {
+      const entity = await getEntity(entityId);
       const name = required(body.name, 'Name', LIMITS.name);
-      assertDepartmentNameFree(entityId, name);
-      const t = now();
-      const r = q('INSERT INTO departments (entity_id, name, name_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
-        .run(Number(entityId), name, key(name), t, t);
-      return getDepartment(r.lastInsertRowid);
+      try {
+        return await one(`INSERT INTO departments (entity_id, name, name_key) VALUES ($1, $2, $3)
+                          RETURNING id, entity_id, name, created_at, updated_at`, [entity.id, name, key(name)]);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw departmentNameTaken(name);
+        throw err;
+      }
     },
-    updateDepartment(id, body) {
-      const dept = getDepartment(id);
+    async updateDepartment(deptId, body) {
+      await getDepartment(deptId);
       const name = required(body.name, 'Name', LIMITS.name);
-      assertDepartmentNameFree(dept.entity_id, name, id);
-      q('UPDATE departments SET name = ?, name_key = ?, updated_at = ? WHERE id = ?').run(name, key(name), now(), Number(id));
-      return getDepartment(id);
+      try {
+        return await one(`UPDATE departments SET name = $1, name_key = $2, updated_at = now() WHERE id = $3
+                          RETURNING id, entity_id, name, created_at, updated_at`, [name, key(name), id(deptId)]);
+      } catch (err) {
+        if (isUniqueViolation(err)) throw departmentNameTaken(name);
+        throw err;
+      }
     },
-    deleteDepartment(id) {
-      const impact = this.departmentImpact(id);
-      q('DELETE FROM departments WHERE id = ?').run(Number(id));
+    async deleteDepartment(deptId) {
+      const impact = await departmentImpact(deptId);
+      await db.query('DELETE FROM departments WHERE id = $1', [impact.department.id]);
       return impact;
     },
-    departmentImpact(id) {
-      const department = getDepartment(id);
-      const focalPoints = q('SELECT id, name, email FROM focal_points WHERE department_id = ? ORDER BY name').all(department.id);
-      return { department, focalPoints };
-    },
+    departmentImpact,
 
     // ---- Focal points ----
-    createFocalPoint(departmentId, body) {
-      getDepartment(departmentId);
+    async createFocalPoint(deptId, body) {
+      const dept = await getDepartment(deptId);
       const fp = focalPointInput(body);
-      const t = now();
-      const r = q(`INSERT INTO focal_points (department_id, name, title, email, email_key, remarks, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(Number(departmentId), fp.name, fp.title, fp.email, key(fp.email), fp.remarks, t, t);
-      const focalPoint = getFocalPoint(r.lastInsertRowid);
-      return { focalPoint, duplicateEmails: emailDuplicates(fp.email, focalPoint.id) };
+      const focalPoint = await one(`INSERT INTO focal_points (department_id, name, title, email, email_key, remarks)
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                    RETURNING id, department_id, name, title, email, remarks, created_at, updated_at`,
+      [dept.id, fp.name, fp.title, fp.email, key(fp.email), fp.remarks]);
+      return { focalPoint, duplicateEmails: await emailDuplicates(fp.email, focalPoint.id) };
     },
-    updateFocalPoint(id, body) {
-      const existing = getFocalPoint(id);
+    async updateFocalPoint(fpId, body) {
+      const existing = await getFocalPoint(fpId);
       const fp = focalPointInput(body);
       // Optionally move to another department.
-      const departmentId = body.department_id ? getDepartment(body.department_id).id : existing.department_id;
-      q(`UPDATE focal_points SET department_id = ?, name = ?, title = ?, email = ?, email_key = ?, remarks = ?, updated_at = ?
-         WHERE id = ?`).run(departmentId, fp.name, fp.title, fp.email, key(fp.email), fp.remarks, now(), Number(id));
-      return { focalPoint: getFocalPoint(id), duplicateEmails: emailDuplicates(fp.email, id) };
+      const departmentId = body.department_id ? (await getDepartment(body.department_id)).id : existing.department_id;
+      const focalPoint = await one(`UPDATE focal_points
+                                    SET department_id = $1, name = $2, title = $3, email = $4, email_key = $5, remarks = $6, updated_at = now()
+                                    WHERE id = $7
+                                    RETURNING id, department_id, name, title, email, remarks, created_at, updated_at`,
+      [departmentId, fp.name, fp.title, fp.email, key(fp.email), fp.remarks, existing.id]);
+      return { focalPoint, duplicateEmails: await emailDuplicates(fp.email, existing.id) };
     },
-    deleteFocalPoint(id) {
-      const fp = getFocalPoint(id);
-      q('DELETE FROM focal_points WHERE id = ?').run(Number(id));
+    async deleteFocalPoint(fpId) {
+      const fp = await getFocalPoint(fpId);
+      await db.query('DELETE FROM focal_points WHERE id = $1', [fp.id]);
       return fp;
     },
     getFocalPoint,
@@ -180,19 +204,16 @@ function createDirectory(db) {
     // Returns entities -> departments -> focal points. With a search term, an entity
     // or department whose name matches keeps all its children; otherwise only
     // matching focal points (and their parents) are kept.
-    tree({ search = '', entityId } = {}) {
+    async tree({ search = '', entityId } = {}) {
       const entities = entityId
-        ? [getEntity(entityId)]
-        : q('SELECT id, name, created_at, updated_at FROM entities ORDER BY name_key').all();
-      const depts = q('SELECT id, entity_id, name, created_at, updated_at FROM departments ORDER BY name_key').all();
-      const fps = q(`SELECT id, department_id, name, title, email, remarks, created_at, updated_at
-                     FROM focal_points ORDER BY name`).all();
+        ? [await getEntity(entityId)]
+        : await all('SELECT id, name, created_at, updated_at FROM entities ORDER BY name_key');
+      const depts = await all('SELECT id, entity_id, name, created_at, updated_at FROM departments ORDER BY name_key');
+      const fps = await all(`SELECT id, department_id, name, title, email, email_key, remarks, created_at, updated_at
+                             FROM focal_points ORDER BY name`);
 
       const emailCounts = new Map();
-      for (const f of fps) {
-        f.email_key = key(f.email);
-        emailCounts.set(f.email_key, (emailCounts.get(f.email_key) || 0) + 1);
-      }
+      for (const f of fps) emailCounts.set(f.email_key, (emailCounts.get(f.email_key) || 0) + 1);
       const fpsByDept = new Map();
       for (const f of fps) {
         f.email_duplicates = emailCounts.get(f.email_key) - 1;
@@ -229,30 +250,28 @@ function createDirectory(db) {
       return result;
     },
 
-    stats() {
-      return {
-        entities: q('SELECT COUNT(*) AS n FROM entities').get().n,
-        departments: q('SELECT COUNT(*) AS n FROM departments').get().n,
-        focalPoints: q('SELECT COUNT(*) AS n FROM focal_points').get().n,
-      };
-    },
-
-    clearAll() {
-      db.exec('DELETE FROM focal_points; DELETE FROM departments; DELETE FROM entities;');
-    },
-
-    transaction(fn) {
-      db.exec('BEGIN');
-      try {
-        const out = fn();
-        db.exec('COMMIT');
-        return out;
-      } catch (err) {
-        db.exec('ROLLBACK');
-        throw err;
-      }
+    async stats() {
+      return one(`SELECT (SELECT COUNT(*) FROM entities)::int AS entities,
+                         (SELECT COUNT(*) FROM departments)::int AS departments,
+                         (SELECT COUNT(*) FROM focal_points)::int AS "focalPoints"`);
     },
   };
 }
 
-module.exports = { createDirectory, AppError, isValidEmail };
+// Runs fn(directory) inside one transaction on a dedicated client.
+async function inTransaction(pool, fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(createDirectory(client), client);
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { createDirectory, inTransaction, AppError, isValidEmail, clean, id, isUniqueViolation };

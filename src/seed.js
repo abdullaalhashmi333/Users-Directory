@@ -1,5 +1,7 @@
 'use strict';
 
+const { inTransaction } = require('./directory');
+
 // Made-up sample data for test mode only. All people are fictional and all
 // emails use the reserved example.com / example.org domains.
 const SAMPLE = [
@@ -73,27 +75,21 @@ const SAMPLE = [
   },
 ];
 
-function insertSample(directory) {
-  for (const e of SAMPLE) {
-    const entity = directory.createEntity({ name: e.name });
-    for (const d of e.departments) {
-      const dept = directory.createDepartment(entity.id, { name: d.name });
-      for (const fp of d.focal_points) directory.createFocalPoint(dept.id, fp);
+// Loads the sample data only into a directory with no entities, so it can
+// never overwrite or mix with existing records.
+async function seedSampleData(pool) {
+  return inTransaction(pool, async (directory, client) => {
+    await client.query('LOCK TABLE entities IN EXCLUSIVE MODE');
+    if ((await directory.stats()).entities > 0) return { seeded: false };
+    for (const e of SAMPLE) {
+      const entity = await directory.createEntity({ name: e.name });
+      for (const d of e.departments) {
+        const dept = await directory.createDepartment(entity.id, { name: d.name });
+        for (const fp of d.focal_points) await directory.createFocalPoint(dept.id, fp);
+      }
     }
-  }
-  return directory.stats();
-}
-
-function seedSampleData(directory) {
-  return directory.transaction(() => insertSample(directory));
-}
-
-// Replaces everything with the sample data (test mode only).
-function resetSampleData(directory) {
-  return directory.transaction(() => {
-    directory.clearAll();
-    return insertSample(directory);
+    return { seeded: true, ...(await directory.stats()) };
   });
 }
 
-module.exports = { SAMPLE, seedSampleData, resetSampleData };
+module.exports = { SAMPLE, seedSampleData };

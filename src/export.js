@@ -13,8 +13,8 @@ const COLUMNS = [
   { header: 'Last Updated', key: 'updated_at', width: 20 },
 ];
 
-function fmt(iso) {
-  return iso ? iso.replace('T', ' ').slice(0, 16) + ' UTC' : '';
+function fmt(value) {
+  return value ? new Date(value).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '';
 }
 
 // One row per focal point; departments or entities without focal points still

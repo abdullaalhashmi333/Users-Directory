@@ -11,6 +11,25 @@
 <body>
   <div id="test-banner" class="test-banner" hidden>Test mode: sample data only. Do not enter real personal data.</div>
 
+  <section id="login-view" class="login-view" hidden>
+    <form id="login-form" class="login-card" novalidate>
+      <h1 class="brand">Users Directory</h1>
+      <p class="login-sub">Sign in to continue.</p>
+      <div id="setup-note" class="warning" hidden>No accounts exist yet. The administrator must set ADMIN_USERNAME and ADMIN_PASSWORD on the server, then restart it.</div>
+      <div class="field">
+        <label for="login-username">Username</label>
+        <input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </div>
+      <div class="field">
+        <label for="login-password">Password</label>
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div id="login-error" class="error" role="alert" hidden></div>
+      <button type="submit" class="btn primary" id="login-submit">Sign in</button>
+    </form>
+  </section>
+
+  <div id="app-view" hidden>
   <header class="topbar">
     <div class="topbar-inner">
       <h1 class="brand">Users Directory</h1>
@@ -26,7 +45,11 @@
             <button id="export-all-menu" class="export-mobile" type="button">Export Excel</button>
             <button id="expand-all" type="button">Expand all</button>
             <button id="collapse-all" type="button">Collapse all</button>
-            <button id="reset-sample" type="button" hidden>Reset to sample data</button>
+            <hr>
+            <div id="whoami" class="menu-note"></div>
+            <button id="manage-users" type="button" hidden>Manage users</button>
+            <button id="change-password" type="button">Change password</button>
+            <button id="sign-out" type="button">Sign out</button>
           </div>
         </details>
       </div>
@@ -35,6 +58,7 @@
   </header>
 
   <main id="tree" class="tree" aria-busy="true"></main>
+  </div>
 
   <dialog id="form-dialog">
     <form id="form" method="dialog" novalidate>
@@ -57,6 +81,18 @@
         <button type="button" class="btn" data-close>Cancel</button>
         <button type="button" class="btn danger" id="confirm-ok">Delete</button>
       </div>
+    </div>
+  </dialog>
+
+  <dialog id="users-dialog">
+    <div class="users-body">
+      <div class="users-head">
+        <h2>Users</h2>
+        <button type="button" class="btn" data-close>Close</button>
+      </div>
+      <p class="field-hint">Viewer: can see and export. Editor: can also add, edit and delete. Admin: can also manage users.</p>
+      <div id="users-list" class="users-list"></div>
+      <button type="button" class="btn primary" id="add-user">+ Add user</button>
     </div>
   </dialog>
 

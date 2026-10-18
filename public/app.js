@@ -2,7 +2,8 @@
 
 (function () {
   const $ = (sel) => document.querySelector(sel);
-  const state = { tree: [], search: '', collapsed: loadCollapsed() };
+  const state = { tree: [], search: '', collapsed: loadCollapsed(), me: null };
+  const canEdit = () => !!state.me && (state.me.role === 'editor' || state.me.role === 'admin');
 
   // ---------- helpers ----------
   function loadCollapsed() {
@@ -13,12 +14,18 @@
   }
 
   async function api(method, url, body) {
+    const signedInAs = state.me;
     const res = await fetch(url, {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
+    // Only a request made while signed in means the session has ended.
+    if (res.status === 401 && signedInAs && signedInAs === state.me) {
+      showLogin();
+      throw new Error('Your session has ended. Please sign in again.');
+    }
     if (!res.ok) {
       const err = new Error(data.error || `Request failed (${res.status}).`);
       err.field = data.field;
@@ -93,7 +100,8 @@
       : `${plural(state.tree.length, 'entity', 'entities')} · ${plural(depts, 'department', 'departments')} · ${plural(fps, 'focal point', 'focal points')}`;
 
     if (!state.tree.length) {
-      root.append(el('div', { class: 'empty' }, searching ? 'No matches found.' : 'No entities yet. Use “+ Entity” to add the first one.'));
+      const hint = canEdit() ? 'No entities yet. Use “+ Entity” to add the first one.' : 'The directory is empty.';
+      root.append(el('div', { class: 'empty' }, searching ? 'No matches found.' : hint));
       return;
     }
     for (const e of state.tree) root.append(renderEntity(e, searching));
@@ -110,10 +118,10 @@
         text('span', 'entity-name', e.name),
         el('span', { class: 'count' }, `${plural(e.departments.length, 'dept', 'depts')} · ${plural(fpCount, 'focal point', 'focal points')}`)),
       el('div', { class: 'row-actions' },
-        el('button', { class: 'btn small', type: 'button', onclick: () => addDepartment(e) }, '+ Department'),
+        canEdit() && el('button', { class: 'btn small', type: 'button', onclick: () => addDepartment(e) }, '+ Department'),
         el('button', { class: 'btn small ghost', type: 'button', title: 'Export this entity to Excel', onclick: () => exportXlsx(e.id) }, 'Export'),
-        el('button', { class: 'btn small ghost', type: 'button', onclick: () => editEntity(e) }, 'Edit'),
-        el('button', { class: 'btn small ghost del', type: 'button', onclick: () => deleteEntity(e) }, 'Delete')));
+        canEdit() && el('button', { class: 'btn small ghost', type: 'button', onclick: () => editEntity(e) }, 'Edit'),
+        canEdit() && el('button', { class: 'btn small ghost del', type: 'button', onclick: () => deleteEntity(e) }, 'Delete')));
     const body = el('div', { class: 'entity-body' });
     if (!e.departments.length) body.append(el('div', { class: 'entity-empty' }, 'No departments yet.'));
     for (const d of e.departments) body.append(renderDepartment(e, d, searching));
@@ -130,7 +138,7 @@
         el('span', { class: 'chev', 'aria-hidden': 'true' }, '▾'),
         text('span', 'dept-name', d.name),
         el('span', { class: 'count' }, plural(d.focal_points.length, 'focal point', 'focal points'))),
-      el('div', { class: 'row-actions' },
+      canEdit() && el('div', { class: 'row-actions' },
         el('button', { class: 'btn small', type: 'button', onclick: () => addFocalPoint(e, d) }, '+ Focal point'),
         el('button', { class: 'btn small ghost', type: 'button', onclick: () => editDepartment(d) }, 'Edit'),
         el('button', { class: 'btn small ghost del', type: 'button', onclick: () => deleteDepartment(e, d) }, 'Delete')));
@@ -153,8 +161,8 @@
     return el('article', { class: 'fp', 'data-focal-point-id': f.id },
       el('div', { class: 'fp-head' },
         text('div', 'fp-name', f.name),
-        el('button', { class: 'btn small ghost', type: 'button', onclick: () => editFocalPoint(e, d, f) }, 'Edit'),
-        el('button', { class: 'btn small ghost del', type: 'button', onclick: () => deleteFocalPoint(f) }, 'Delete')),
+        canEdit() && el('button', { class: 'btn small ghost', type: 'button', onclick: () => editFocalPoint(e, d, f) }, 'Edit'),
+        canEdit() && el('button', { class: 'btn small ghost del', type: 'button', onclick: () => deleteFocalPoint(f) }, 'Delete')),
       text('div', 'fp-title', f.title),
       email,
       f.remarks ? text('div', 'fp-remarks', f.remarks) : null,
@@ -179,7 +187,12 @@
   }
 
   // ---------- form dialog ----------
+  // Each open form gets a number, so a slow save from a previous form can't close
+  // or re-enable the one that replaced it.
+  let formGeneration = 0;
+
   function openForm({ title, fields, values = {}, submitLabel = 'Save', onEmailInput, onSubmit }) {
+    const generation = ++formGeneration;
     const dialog = $('#form-dialog');
     const form = $('#form');
     $('#form-title').textContent = title;
@@ -192,9 +205,17 @@
     const inputs = {};
     for (const f of fields) {
       const inputId = `f-${f.name}`;
-      const input = f.multiline
-        ? el('textarea', { id: inputId, name: f.name, dir: 'auto', rows: 4, maxlength: f.max })
-        : el('input', { id: inputId, name: f.name, type: f.type || 'text', dir: 'auto', maxlength: f.max, autocomplete: 'off', inputmode: f.type === 'email' ? 'email' : undefined });
+      let input;
+      if (f.options) {
+        input = el('select', { id: inputId, name: f.name }, f.options.map(([value, label]) => el('option', { value }, label)));
+      } else if (f.multiline) {
+        input = el('textarea', { id: inputId, name: f.name, dir: 'auto', rows: 4, maxlength: f.max });
+      } else {
+        input = el('input', {
+          id: inputId, name: f.name, type: f.type || 'text', dir: f.type === 'password' ? undefined : 'auto', maxlength: f.max,
+          autocomplete: f.autocomplete || 'off', inputmode: f.type === 'email' ? 'email' : undefined,
+        });
+      }
       input.value = values[f.name] ?? '';
       if (f.required) input.required = true;
       inputs[f.name] = input;
@@ -226,26 +247,29 @@
       for (const [k, input] of Object.entries(inputs)) data[k] = input.value;
       const missing = fields.find((f) => f.required && !data[f.name].trim());
       if (missing) return showError(`${missing.label} is required.`, missing.name);
+      const short = fields.find((f) => f.minLength && data[f.name] && data[f.name].length < f.minLength);
+      if (short) return showError(`${short.label} must be at least ${short.minLength} characters.`, short.name);
       if (inputs.email && !/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(data.email.trim())) {
         return showError('Email format is not valid (example: name@example.com).', 'email');
       }
       $('#form-submit').disabled = true;
       try {
         await onSubmit(data);
-        dialog.close();
+        if (generation === formGeneration) dialog.close();
       } catch (err) {
-        showError(err.message, err.field);
+        if (generation === formGeneration) showError(err.message, err.field);
       } finally {
-        $('#form-submit').disabled = false;
+        if (generation === formGeneration) $('#form-submit').disabled = false;
       }
     };
     function showError(msg, field) {
       error.textContent = msg; error.hidden = false;
       if (field && inputs[field]) { inputs[field].closest('.field').classList.add('invalid'); inputs[field].focus(); }
     }
-    dialog.showModal();
+    $('#form-submit').disabled = false;
+    if (!dialog.open) dialog.showModal();
     const first = fields[0] && inputs[fields[0].name];
-    if (first) setTimeout(() => first.focus(), 30);
+    if (first) first.focus();
   }
 
   // ---------- confirm dialog ----------
@@ -380,19 +404,154 @@
     $('.menu').open = false;
   }
 
-  async function resetSample() {
+  // ---------- sign in / out ----------
+  const ROLE_LABEL = { admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
+
+  function showLogin({ clearPassword = true } = {}) {
+    state.me = null;
+    state.tree = [];
+    $('#tree').replaceChildren();
+    document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+    $('#app-view').hidden = true;
+    $('#login-view').hidden = false;
+    if (clearPassword) $('#login-password').value = '';
+    if (!$('#login-username').value && document.activeElement === document.body) $('#login-username').focus();
+  }
+
+  function showApp() {
+    $('#login-view').hidden = true;
+    $('#app-view').hidden = false;
+    $('#login-error').hidden = true;
+    const me = state.me;
+    $('#whoami').textContent = `Signed in as ${me.display_name || me.username} (${ROLE_LABEL[me.role]})`;
+    $('#add-entity').hidden = !canEdit();
+    $('#manage-users').hidden = me.role !== 'admin';
+    load();
+  }
+
+  async function boot() {
+    try {
+      const config = await api('GET', '/api/config');
+      $('#test-banner').hidden = !config.testMode;
+      $('#setup-note').hidden = !config.setupRequired;
+    } catch { /* shown below if the API is down */ }
+    try {
+      state.me = (await api('GET', '/api/me')).user;
+      showApp();
+    } catch {
+      // Someone may have signed in while this check was in flight; otherwise show
+      // the sign-in form, keeping anything already typed into it.
+      if (!state.me) showLogin({ clearPassword: false });
+    }
+  }
+
+  async function signIn(ev) {
+    ev.preventDefault();
+    const err = $('#login-error');
+    err.hidden = true;
+    $('#login-submit').disabled = true;
+    try {
+      const r = await api('POST', '/api/login', { username: $('#login-username').value, password: $('#login-password').value });
+      state.me = r.user;
+      $('#login-password').value = '';
+      showApp();
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    } finally {
+      $('#login-submit').disabled = false;
+    }
+  }
+
+  async function signOut() {
     $('.menu').open = false;
+    await api('POST', '/api/logout').catch(() => {});
+    showLogin();
+  }
+
+  function changePassword() {
+    openForm({
+      title: 'Change password',
+      fields: [
+        { name: 'current_password', label: 'Current password', type: 'password', required: true, autocomplete: 'current-password' },
+        { name: 'new_password', label: 'New password', type: 'password', required: true, minLength: 10, autocomplete: 'new-password', hint: 'At least 10 characters.' },
+      ],
+      onSubmit: async (data) => { await api('POST', '/api/me/password', data); toast('Password changed.'); },
+    });
+  }
+
+  // ---------- user management (admins) ----------
+  const ROLE_OPTIONS = [['viewer', 'Viewer'], ['editor', 'Editor'], ['admin', 'Admin']];
+
+  async function openUsers() {
+    const dialog = $('#users-dialog');
+    if (!dialog.open) dialog.showModal();
+    const users = await api('GET', '/api/users');
+    $('#users-list').replaceChildren(...users.map((u) => {
+      const self = u.id === state.me.id;
+      return el('div', { class: `user-row${u.active ? '' : ' inactive'}` },
+        el('div', { class: 'user-info' },
+          el('div', { class: 'user-name', dir: 'auto' }, u.display_name || u.username, self ? el('span', { class: 'count' }, ' (you)') : null),
+          el('div', { class: 'user-meta' }, `${u.username} · ${ROLE_LABEL[u.role]}${u.active ? '' : ' · deactivated'}`),
+          el('div', { class: 'user-meta' }, u.last_login_at ? `Last sign-in ${fmtDate(u.last_login_at)}` : 'Never signed in')),
+        el('div', { class: 'row-actions' },
+          el('button', { class: 'btn small ghost', type: 'button', onclick: () => editUser(u) }, 'Edit'),
+          !self && el('button', { class: 'btn small ghost', type: 'button', onclick: () => toggleUser(u) }, u.active ? 'Deactivate' : 'Activate'),
+          !self && el('button', { class: 'btn small ghost del', type: 'button', onclick: () => deleteUser(u) }, 'Delete')));
+    }));
+  }
+
+  function addUser() {
+    openForm({
+      title: 'Add user', submitLabel: 'Add',
+      fields: [
+        { name: 'username', label: 'Username', required: true, max: 64, hint: 'Letters, numbers, dot, dash, underscore or @.' },
+        { name: 'display_name', label: 'Display name', max: 200 },
+        { name: 'role', label: 'Role', options: ROLE_OPTIONS },
+        { name: 'password', label: 'Password', type: 'password', required: true, minLength: 10, autocomplete: 'new-password', hint: 'At least 10 characters. Share it with the person privately.' },
+      ],
+      values: { role: 'viewer' },
+      onSubmit: async (data) => { await api('POST', '/api/users', data); toast('User added.'); await openUsers(); },
+    });
+  }
+
+  function editUser(u) {
+    openForm({
+      title: `Edit ${u.username}`,
+      fields: [
+        { name: 'display_name', label: 'Display name', max: 200 },
+        { name: 'role', label: 'Role', options: ROLE_OPTIONS },
+        { name: 'password', label: 'New password', type: 'password', minLength: 10, autocomplete: 'new-password', hint: 'Leave empty to keep the current password. Setting one signs the user out.' },
+      ],
+      values: { display_name: u.display_name, role: u.role },
+      onSubmit: async (data) => {
+        if (!data.password) delete data.password;
+        await api('PUT', `/api/users/${u.id}`, data);
+        toast('User updated.');
+        if (u.id === state.me.id) state.me = (await api('GET', '/api/me')).user;
+        await openUsers();
+      },
+    });
+  }
+
+  async function toggleUser(u) {
+    await api('PUT', `/api/users/${u.id}`, { active: !u.active });
+    toast(u.active ? 'User deactivated and signed out.' : 'User activated.');
+    await openUsers();
+  }
+
+  async function deleteUser(u) {
     const ok = await confirmDelete({
-      title: 'Reset to sample data',
-      message: [el('p', null, 'This deletes everything in the directory and reloads the made-up sample data.'), el('p', null, 'This cannot be undone.')],
-      confirmLabel: 'Reset',
+      title: 'Delete user',
+      message: [el('p', { dir: 'auto' }, 'Delete user ', el('strong', null, u.username), '? They will no longer be able to sign in.'), el('p', null, 'Directory records are not affected.')],
     });
     if (!ok) return;
-    await api('POST', '/api/admin/reset-sample-data');
-    state.collapsed.clear(); saveCollapsed();
-    toast('Sample data restored.');
-    await load();
+    await api('DELETE', `/api/users/${u.id}`);
+    toast('User deleted.');
+    await openUsers();
   }
+
+  $('#add-user').addEventListener('click', addUser);
 
   // ---------- wiring ----------
   window.addEventListener('unhandledrejection', (ev) => toast(ev.reason?.message || 'Something went wrong.', 'warn'));
@@ -401,7 +560,6 @@
   $('#export-all-menu').addEventListener('click', () => { $('.menu').open = false; exportXlsx(); });
   $('#expand-all').addEventListener('click', () => setAll(false));
   $('#collapse-all').addEventListener('click', () => setAll(true));
-  $('#reset-sample').addEventListener('click', resetSample);
   document.addEventListener('click', (ev) => { const m = $('.menu'); if (m.open && !m.contains(ev.target)) m.open = false; });
   let searchTimer;
   $('#search').addEventListener('input', (ev) => {
@@ -409,9 +567,10 @@
     searchTimer = setTimeout(() => { state.search = ev.target.value; load(); }, 200);
   });
 
-  api('GET', '/api/config').then((c) => {
-    $('#test-banner').hidden = !c.testMode;
-    $('#reset-sample').hidden = !c.testMode;
-  }).catch(() => {});
-  load();
+  $('#manage-users').addEventListener('click', () => { $('.menu').open = false; openUsers(); });
+  $('#change-password').addEventListener('click', () => { $('.menu').open = false; changePassword(); });
+  $('#sign-out').addEventListener('click', signOut);
+  $('#login-form').addEventListener('submit', signIn);
+
+  boot();
 })();

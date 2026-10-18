@@ -142,3 +142,31 @@ dialog h2 { margin: 0; font-size: 18px; }
   #export-all { display: none; }
   .menu-list .export-mobile { display: block; }
 }
+
+/* ---- sign in ---- */
+.login-view { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.login-card { width: min(380px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 24px; display: grid; gap: 14px; }
+.login-card .brand { font-size: 22px; }
+.login-sub { margin: -8px 0 0; color: var(--muted); }
+.login-card .btn { min-height: 42px; }
+
+/* ---- menu extras ---- */
+.menu-list hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+.menu-note { font-size: 12px; color: var(--muted); padding: 6px 10px; overflow-wrap: anywhere; }
+
+/* ---- form selects ---- */
+.field select { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+
+/* ---- users dialog ---- */
+#users-dialog { width: min(640px, calc(100vw - 24px)); }
+.users-body { padding: 18px; display: grid; gap: 12px; }
+.users-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.users-head h2 { margin: 0; font-size: 18px; }
+.users-body .field-hint { margin: 0; }
+.users-list { display: grid; gap: 8px; max-height: 55vh; overflow: auto; }
+.user-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface-2); }
+.user-row.inactive { opacity: .6; }
+.user-info { flex: 1 1 220px; min-width: 0; }
+.user-name { font-weight: 600; overflow-wrap: anywhere; }
+.user-meta { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#users-dialog .btn.primary { justify-self: start; }

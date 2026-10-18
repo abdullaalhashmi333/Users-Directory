@@ -291,67 +291,88 @@ describe('Excel export', () => {
   });
 });
 
-describe('sample data and test mode', () => {
-  test('seeds sample data into an empty database only', async () => {
+describe('sample data', () => {
+  test('is off by default', async () => {
+    const s = await startServer();
+    assert.equal((await s.get('/api/stats')).data.entities, 0);
+    await s.close();
+  });
+
+  test('loads into an empty directory when enabled', async () => {
     const s = await startServer({ seed: true });
-    const stats = (await s.get('/health')).data;
-    assert.equal(stats.ok, true);
+    const stats = (await s.get('/api/stats')).data;
     assert.equal(stats.entities, 4);
     assert.equal(stats.focalPoints, 11);
     await s.close();
   });
 
-  test('sample data uses only reserved example domains', () => {
+  test('never touches a directory that already has data', async () => {
+    const { seedSampleData } = require('../src/seed');
+    const s = await startServer();
+    await s.post('/api/entities', { name: 'Existing record' });
+    const result = await seedSampleData(s.pool);
+    assert.equal(result.seeded, false);
+    const tree = (await s.get('/api/tree')).data;
+    assert.deepEqual(tree.map((e) => e.name), ['Existing record']);
+    await s.close();
+  });
+
+  test('uses only reserved example domains', () => {
     const { SAMPLE } = require('../src/seed');
     const emails = SAMPLE.flatMap((e) => e.departments.flatMap((d) => d.focal_points.map((f) => f.email)));
     assert.ok(emails.length > 0);
     for (const email of emails) assert.match(email, /\.example\.(com|org)$/);
   });
 
-  test('reset restores sample data in test mode', async () => {
-    const s = await startServer({ seed: true });
-    await s.post('/api/entities', { name: 'Extra' });
-    const r = await s.post('/api/admin/reset-sample-data');
-    assert.equal(r.status, 200);
-    assert.equal(r.data.entities, 4);
-    await s.close();
-  });
-
-  test('reset is refused outside test mode', async () => {
-    const s = await startServer({ testMode: false });
-    assert.equal((await s.post('/api/admin/reset-sample-data')).status, 403);
-    assert.equal((await s.get('/api/config')).data.testMode, false);
+  test('there is no way to reset data from the app', async () => {
+    const s = await startServer();
+    assert.equal((await s.post('/api/admin/reset-sample-data')).status, 404);
     await s.close();
   });
 });
 
-describe('web app and auth', () => {
-  test('serves the interface', async () => {
+describe('persistence', () => {
+  test('records survive an app restart and re-running migrations', async () => {
+    const { createApp, initDatabase } = require('../src/app');
+    const s = await startServer({ seed: true });
+    await s.post('/api/entities', { name: 'Kept across restarts' });
+    // Simulate a new deploy: run start-up again on the same database, with seeding on.
+    const result = await initDatabase(s.pool, { seed: true, adminUsername: 'x-admin', adminPassword: 'another-password' });
+    assert.equal(result.seeded, false);
+    assert.equal(result.adminCreated, false);
+    createApp(s.pool);
+    const names = (await s.get('/api/tree')).data.map((e) => e.name);
+    assert.ok(names.includes('Kept across restarts'));
+    assert.equal(names.length, 5);
+    await s.close();
+  });
+});
+
+describe('web app', () => {
+  test('serves the interface with security headers', async () => {
     const s = await startServer();
     const r = await s.get('/');
     assert.equal(r.status, 200);
     assert.match(r.data.toString(), /<meta name="viewport"/);
     assert.match(r.data.toString(), /charset="utf-8"/);
+    assert.match(r.headers.get('content-security-policy'), /default-src 'self'/);
+    assert.equal(r.headers.get('x-frame-options'), 'DENY');
     assert.equal((await s.get('/app.js')).status, 200);
     assert.equal((await s.get('/api/nope')).status, 404);
     await s.close();
   });
 
-  test('optional password protects everything except /health', async () => {
-    const s = await startServer({ user: 'tester', password: 'secret-pass' });
-    assert.equal((await s.get('/')).status, 401);
-    assert.equal((await s.get('/api/tree')).status, 401);
-    assert.equal((await s.get('/health')).status, 200);
-    const auth = { Authorization: `Basic ${Buffer.from('tester:secret-pass').toString('base64')}` };
-    assert.equal((await s.get('/api/tree', auth)).status, 200);
-    const wrong = { Authorization: `Basic ${Buffer.from('tester:nope').toString('base64')}` };
-    assert.equal((await s.get('/api/tree', wrong)).status, 401);
+  test('health check reports no data', async () => {
+    const s = await startServer({ seed: true });
+    const r = await s.client().get('/health');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.data, { ok: true });
     await s.close();
   });
 
   test('invalid JSON returns 400', async () => {
     const s = await startServer();
-    const res = await fetch(`${s.base}/api/entities`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' });
+    const res = await fetch(`${s.base}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' });
     assert.equal(res.status, 400);
     await s.close();
   });

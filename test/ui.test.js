@@ -5,7 +5,7 @@
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
-const { startServer } = require('./helpers');
+const { startServer, ADMIN } = require('./helpers');
 
 describe('interface', () => {
   let s; let browser;
@@ -18,14 +18,35 @@ describe('interface', () => {
     await s?.close();
   });
 
-  async function open(viewport = { width: 1280, height: 900 }) {
+  async function signIn(page, username, password) {
+    await page.goto(s.base);
+    await page.fill('#login-username', username);
+    await page.fill('#login-password', password);
+    await page.click('#login-submit');
+  }
+
+  async function open(viewport = { width: 1280, height: 900 }, user = ADMIN) {
     const page = await browser.newPage({ viewport, acceptDownloads: true });
     const errors = [];
     page.on('pageerror', (e) => errors.push(e));
-    await page.goto(s.base);
+    page.on('console', (m) => { if (m.type() === 'error' && /Content Security Policy/.test(m.text())) errors.push(m.text()); });
+    await signIn(page, user.username, user.password);
     await page.waitForSelector('.entity');
     return { page, errors };
   }
+
+  test('shows only the sign-in screen until signed in', async () => {
+    const page = await browser.newPage();
+    await page.goto(s.base);
+    await page.locator('#login-view').waitFor();
+    assert.equal(await page.locator('#app-view').isVisible(), false);
+    assert.equal(await page.locator('.entity').count(), 0);
+    await page.fill('#login-username', ADMIN.username);
+    await page.fill('#login-password', 'wrong-password');
+    await page.click('#login-submit');
+    await page.locator('#login-error', { hasText: 'Wrong username or password' }).waitFor();
+    await page.close();
+  });
 
   test('shows the full tree with Arabic and English', async () => {
     const { page, errors } = await open();
@@ -109,6 +130,42 @@ describe('interface', () => {
     const { page } = await open();
     const [download] = await Promise.all([page.waitForEvent('download'), page.click('#export-all')]);
     assert.match(download.suggestedFilename(), /^users-directory-.*\.xlsx$/);
+    await page.close();
+  });
+
+  test('viewer sees the directory without edit buttons', async () => {
+    await s.post('/api/users', { username: 'ui-viewer', password: 'ui-viewer-password', role: 'viewer' });
+    const { page } = await open(undefined, { username: 'ui-viewer', password: 'ui-viewer-password' });
+    assert.equal(await page.locator('#add-entity').isVisible(), false);
+    assert.equal(await page.getByRole('button', { name: 'Delete' }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Edit' }).count(), 0);
+    assert.ok(await page.getByRole('button', { name: 'Export' }).count() > 0);
+    await page.click('.menu summary');
+    assert.equal(await page.locator('#manage-users').isVisible(), false);
+    await page.close();
+  });
+
+  test('admin adds a user from the Users screen, and signing out returns to sign-in', async () => {
+    const { page } = await open();
+    await page.click('.menu summary');
+    await page.click('#manage-users');
+    await page.locator('#users-dialog .user-row').first().waitFor();
+    await page.click('#add-user');
+    await page.fill('#f-username', 'ui-editor');
+    await page.fill('#f-display_name', 'محرر تجريبي');
+    await page.selectOption('#f-role', 'editor');
+    await page.fill('#f-password', 'short');
+    await page.click('#form-submit');
+    await page.locator('#form-error', { hasText: 'at least 10' }).waitFor();
+    await page.fill('#f-password', 'ui-editor-password');
+    await page.click('#form-submit');
+    await page.locator('#users-dialog .user-row', { hasText: 'محرر تجريبي' }).waitFor();
+    await page.locator('#users-dialog [data-close]').click();
+    await page.click('.menu summary');
+    await page.click('#sign-out');
+    await page.locator('#login-view').waitFor();
+    await signIn(page, 'ui-editor', 'ui-editor-password');
+    await page.locator('#add-entity').waitFor();
     await page.close();
   });
 
